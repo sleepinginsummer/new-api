@@ -295,14 +295,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
+		channelConcurrency, _ := common.GetContextKeyType[int64](c, constant.ContextKeyChannelConcurrency)
 		if !autoBan {
 			autoBanInt = 0
 		}
 		return &model.Channel{
-			Id:      c.GetInt("channel_id"),
-			Type:    c.GetInt("channel_type"),
-			Name:    c.GetString("channel_name"),
-			AutoBan: &autoBanInt,
+			Id:                 c.GetInt("channel_id"),
+			Type:               c.GetInt("channel_type"),
+			Name:               c.GetString("channel_name"),
+			ChannelConcurrency: &channelConcurrency,
+			AutoBan:            &autoBanInt,
 		}, nil
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
