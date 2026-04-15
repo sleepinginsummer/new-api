@@ -140,6 +140,8 @@ export const useChannelsData = () => {
     BALANCE: 'balance',
     PRIORITY: 'priority',
     WEIGHT: 'weight',
+    CHANNEL_CONCURRENCY: 'channel_concurrency',
+    CONCURRENCY_STATUS: 'concurrency_status',
     OPERATE: 'operate',
   };
 
@@ -180,6 +182,8 @@ export const useChannelsData = () => {
       [COLUMN_KEYS.BALANCE]: true,
       [COLUMN_KEYS.PRIORITY]: true,
       [COLUMN_KEYS.WEIGHT]: true,
+      [COLUMN_KEYS.CHANNEL_CONCURRENCY]: true,
+      [COLUMN_KEYS.CONCURRENCY_STATUS]: true,
       [COLUMN_KEYS.OPERATE]: true,
     };
   };
@@ -260,6 +264,10 @@ export const useChannelsData = () => {
             response_time: 0,
             priority: -1,
             weight: -1,
+            channel_concurrency: -1,
+            current_concurrency: 0,
+            queue_length: 0,
+            concurrency_status_text: '0/0/0',
           };
           tagChannelDates.children = [];
           channelDates.push(tagChannelDates);
@@ -283,6 +291,15 @@ export const useChannelsData = () => {
           }
         }
 
+        if (tagChannelDates.channel_concurrency === -1) {
+          tagChannelDates.channel_concurrency = channels[i].channel_concurrency;
+        } else if (
+          tagChannelDates.channel_concurrency !==
+          channels[i].channel_concurrency
+        ) {
+          tagChannelDates.channel_concurrency = '';
+        }
+
         if (tagChannelDates.group === '') {
           tagChannelDates.group = channels[i].group;
         } else {
@@ -299,6 +316,15 @@ export const useChannelsData = () => {
           tagChannelDates.status = 1;
         }
         tagChannelDates.used_quota += channels[i].used_quota;
+        tagChannelDates.current_concurrency +=
+          channels[i].current_concurrency || 0;
+        tagChannelDates.queue_length += channels[i].queue_length || 0;
+        const concurrencyLimit =
+          tagChannelDates.channel_concurrency === '' ||
+          tagChannelDates.channel_concurrency === -1
+            ? '-'
+            : tagChannelDates.channel_concurrency;
+        tagChannelDates.concurrency_status_text = `${tagChannelDates.queue_length}/${tagChannelDates.current_concurrency}/${concurrencyLimit}`;
         tagChannelDates.response_time += channels[i].response_time;
         tagChannelDates.response_time = tagChannelDates.response_time / 2;
       }
@@ -464,6 +490,12 @@ export const useChannelsData = () => {
         if (value === '') return;
         data.weight = parseInt(value);
         if (data.weight < 0) data.weight = 0;
+        res = await API.put('/api/channel/', data);
+        break;
+      case 'channel_concurrency':
+        if (value === '') return;
+        data.channel_concurrency = parseInt(value);
+        if (data.channel_concurrency < 0) data.channel_concurrency = 0;
         res = await API.put('/api/channel/', data);
         break;
       case 'enable_all':
@@ -635,6 +667,17 @@ export const useChannelsData = () => {
           return;
         }
         data.weight = parseInt(data.weight);
+        break;
+      case 'channel_concurrency':
+        if (
+          data.channel_concurrency === undefined ||
+          data.channel_concurrency === '' ||
+          data.channel_concurrency < 0
+        ) {
+          showInfo('渠道并发必须是非负整数！');
+          return;
+        }
+        data.channel_concurrency = parseInt(data.channel_concurrency);
         break;
     }
 

@@ -27,6 +27,7 @@ type Channel struct {
 	Status             int     `json:"status" gorm:"default:1"`
 	Name               string  `json:"name" gorm:"index"`
 	Weight             *uint   `json:"weight" gorm:"default:0"`
+	ChannelConcurrency *int64  `json:"channel_concurrency" gorm:"default:0"` // 0 表示不限制并发，大于 0 表示单渠道最大并发数
 	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
 	TestTime           int64   `json:"test_time" gorm:"bigint"`
 	ResponseTime       int     `json:"response_time"` // in milliseconds
@@ -55,6 +56,11 @@ type Channel struct {
 
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
+
+	// runtime info
+	CurrentConcurrency    int    `json:"current_concurrency" gorm:"-"`
+	QueueLength           int    `json:"queue_length" gorm:"-"`
+	ConcurrencyStatusText string `json:"concurrency_status_text" gorm:"-"`
 }
 
 type ChannelInfo struct {
@@ -420,6 +426,16 @@ func (channel *Channel) GetWeight() int {
 	return int(*channel.Weight)
 }
 
+func (channel *Channel) GetChannelConcurrency() int64 {
+	if channel.ChannelConcurrency == nil {
+		return 0
+	}
+	if *channel.ChannelConcurrency < 0 {
+		return 0
+	}
+	return *channel.ChannelConcurrency
+}
+
 func (channel *Channel) GetBaseURL() string {
 	if channel.BaseURL == nil {
 		return ""
@@ -530,6 +546,7 @@ func (channel *Channel) Delete() error {
 	if err != nil {
 		return err
 	}
+	common.DeleteChannelConcurrencyState(channel.Id)
 	err = channel.DeleteAbilities()
 	return err
 }
@@ -697,7 +714,7 @@ func DisableChannelByTag(tag string) error {
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, channelConcurrency *int64, paramOverride *string, headerOverride *string) error {
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
@@ -722,6 +739,9 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	}
 	if weight != nil {
 		updateData.Weight = weight
+	}
+	if channelConcurrency != nil {
+		updateData.ChannelConcurrency = channelConcurrency
 	}
 	if paramOverride != nil {
 		updateData.ParamOverride = paramOverride

@@ -68,6 +68,19 @@ func clearChannelInfo(channel *model.Channel) {
 	}
 }
 
+// applyChannelRuntimeStats 将单进程内实时并发状态注入到渠道返回结构中。
+func applyChannelRuntimeStats(channels []*model.Channel) {
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		stats := common.GetChannelConcurrencyStats(channel.Id, channel.GetChannelConcurrency())
+		channel.CurrentConcurrency = stats.InFlight
+		channel.QueueLength = stats.Queued
+		channel.ConcurrencyStatusText = common.FormatChannelConcurrencyStatus(stats)
+	}
+}
+
 func GetAllChannels(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*model.Channel, 0)
@@ -147,6 +160,7 @@ func GetAllChannels(c *gin.Context) {
 	for _, datum := range channelData {
 		clearChannelInfo(datum)
 	}
+	applyChannelRuntimeStats(channelData)
 
 	countQuery := model.DB.Model(&model.Channel{})
 	if statusFilter == common.ChannelStatusEnabled {
@@ -345,6 +359,7 @@ func SearchChannels(c *gin.Context) {
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
 	}
+	applyChannelRuntimeStats(pagedData)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -434,6 +449,10 @@ func validateTwoFactorAuth(twoFA *model.TwoFA, code string) bool {
 
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
+	if channel == nil {
+		return fmt.Errorf("channel cannot be empty")
+	}
+
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
@@ -441,7 +460,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
-		if channel == nil || channel.Key == "" {
+		if channel.Key == "" {
 			return fmt.Errorf("channel cannot be empty")
 		}
 
@@ -451,6 +470,10 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 				return fmt.Errorf("模型名称过长: %s", m)
 			}
 		}
+	}
+
+	if channel.ChannelConcurrency != nil && *channel.ChannelConcurrency < 0 {
+		return fmt.Errorf("渠道并发必须是非负整数")
 	}
 
 	// VertexAI 特殊校验
@@ -671,6 +694,7 @@ func DeleteChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	common.DeleteChannelConcurrencyState(id)
 	model.InitChannelCache()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -695,15 +719,16 @@ func DeleteDisabledChannel(c *gin.Context) {
 }
 
 type ChannelTag struct {
-	Tag            string  `json:"tag"`
-	NewTag         *string `json:"new_tag"`
-	Priority       *int64  `json:"priority"`
-	Weight         *uint   `json:"weight"`
-	ModelMapping   *string `json:"model_mapping"`
-	Models         *string `json:"models"`
-	Groups         *string `json:"groups"`
-	ParamOverride  *string `json:"param_override"`
-	HeaderOverride *string `json:"header_override"`
+	Tag                string  `json:"tag"`
+	NewTag             *string `json:"new_tag"`
+	Priority           *int64  `json:"priority"`
+	Weight             *uint   `json:"weight"`
+	ChannelConcurrency *int64  `json:"channel_concurrency"`
+	ModelMapping       *string `json:"model_mapping"`
+	Models             *string `json:"models"`
+	Groups             *string `json:"groups"`
+	ParamOverride      *string `json:"param_override"`
+	HeaderOverride     *string `json:"header_override"`
 }
 
 func DisableTagChannels(c *gin.Context) {
@@ -791,7 +816,7 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
-	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ChannelConcurrency, channelTag.ParamOverride, channelTag.HeaderOverride)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -823,6 +848,9 @@ func DeleteChannelBatch(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	for _, channelID := range channelBatch.Ids {
+		common.DeleteChannelConcurrencyState(channelID)
 	}
 	model.InitChannelCache()
 	c.JSON(http.StatusOK, gin.H{

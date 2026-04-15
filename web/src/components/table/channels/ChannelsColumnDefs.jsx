@@ -140,6 +140,19 @@ const renderType = (type, record = {}, t) => {
   );
 };
 
+const renderConcurrencyStatus = (record, t) => {
+  const statusText =
+    record?.concurrency_status_text ||
+    `${record?.queue_length || 0}/${record?.current_concurrency || 0}/${record?.channel_concurrency || 0}`;
+  return (
+    <Tooltip content={t('格式：排队数/处理中数/并发限制，0 表示不限制')}>
+      <Tag color='cyan' type='light' shape='circle'>
+        {statusText}
+      </Tag>
+    </Tooltip>
+  );
+};
+
 const renderTagType = (t) => {
   return (
     <Tag color='light-blue' shape='circle' type='light'>
@@ -681,6 +694,72 @@ export const getChannelsColumns = ({
           );
         }
       },
+    },
+    {
+      key: COLUMN_KEYS.CHANNEL_CONCURRENCY,
+      title: t('并发'),
+      dataIndex: 'channel_concurrency',
+      render: (text, record) => {
+        if (record.children === undefined) {
+          return (
+            <div>
+              <InputNumber
+                style={{ width: 80 }}
+                name='channel_concurrency'
+                onBlur={(e) => {
+                  manageChannel(
+                    record.id,
+                    'channel_concurrency',
+                    record,
+                    e.target.value,
+                  );
+                }}
+                keepFocus={true}
+                innerButtons
+                defaultValue={record.channel_concurrency}
+                min={0}
+                size='small'
+              />
+            </div>
+          );
+        } else {
+          return (
+            <InputNumber
+              style={{ width: 80 }}
+              name='channel_concurrency'
+              keepFocus={true}
+              onBlur={(e) => {
+                Modal.warning({
+                  title: t('修改子渠道并发'),
+                  content:
+                    t('确定要修改所有子渠道并发为 ') +
+                    e.target.value +
+                    t(' 吗？'),
+                  onOk: () => {
+                    if (e.target.value === '') {
+                      return;
+                    }
+                    submitTagEdit('channel_concurrency', {
+                      tag: record.key,
+                      channel_concurrency: e.target.value,
+                    });
+                  },
+                });
+              }}
+              innerButtons
+              defaultValue={record.channel_concurrency}
+              min={0}
+              size='small'
+            />
+          );
+        }
+      },
+    },
+    {
+      key: COLUMN_KEYS.CONCURRENCY_STATUS,
+      title: t('并发状态'),
+      dataIndex: 'concurrency_status_text',
+      render: (text, record) => renderConcurrencyStatus(record, t),
     },
     {
       key: COLUMN_KEYS.OPERATE,

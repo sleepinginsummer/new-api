@@ -186,6 +186,7 @@ const EditChannelModal = (props) => {
     groups: ['default'],
     priority: 0,
     weight: 0,
+    channel_concurrency: 0,
     tag: '',
     multi_key_mode: 'random',
     // 渠道额外设置的默认值
@@ -1009,6 +1010,7 @@ const EditChannelModal = (props) => {
         (data.remark && data.remark.trim()) ||
         (data.priority && data.priority !== 0) ||
         (data.weight && data.weight !== 0) ||
+        (data.channel_concurrency && data.channel_concurrency !== 0) ||
         (data.proxy && data.proxy.trim()) ||
         (data.system_prompt && data.system_prompt.trim()) ||
         data.thinking_to_content ||
@@ -2457,6 +2459,23 @@ const EditChannelModal = (props) => {
                         min={0}
                         onNumberChange={(value) => handleInputChange('weight', value)}
                         style={{ width: '100%' }}
+                      />
+                    </Col>
+                  </Row>
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <Form.InputNumber
+                        field='channel_concurrency'
+                        label={t('渠道并发')}
+                        placeholder={t('渠道并发')}
+                        min={0}
+                        onNumberChange={(value) =>
+                          handleInputChange('channel_concurrency', value)
+                        }
+                        style={{ width: '100%' }}
+                        extraText={t(
+                          '0 表示不限制；1 表示同一时刻最多处理 1 个请求，其余排队等待。',
+                        )}
                       />
                     </Col>
                   </Row>
