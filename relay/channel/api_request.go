@@ -78,6 +78,15 @@ var passthroughSkipHeaderNamesLower = map[string]struct{}{
 
 var headerPassthroughRegexCache sync.Map // map[string]*regexp.Regexp
 
+// wrapChannelSetupError 将渠道请求准备阶段的错误包装为渠道级错误。
+// 这类错误通常来自渠道凭证或鉴权配置异常，应允许上层继续切换后续候选渠道。
+func wrapChannelSetupError(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return types.NewError(fmt.Errorf("%s failed: %w", step, err), types.ErrorCodeChannelInvalidKey)
+}
+
 func getHeaderPassthroughRegex(pattern string) (*regexp.Regexp, error) {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
@@ -290,7 +299,7 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
-		return nil, fmt.Errorf("get request url failed: %w", err)
+		return nil, wrapChannelSetupError("get request url", err)
 	}
 	if common2.DebugEnabled {
 		println("fullRequestURL:", fullRequestURL)
@@ -302,7 +311,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
-		return nil, fmt.Errorf("setup request header failed: %w", err)
+		return nil, wrapChannelSetupError("setup request header", err)
 	}
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置
@@ -321,7 +330,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
-		return nil, fmt.Errorf("get request url failed: %w", err)
+		return nil, wrapChannelSetupError("get request url", err)
 	}
 	if common2.DebugEnabled {
 		println("fullRequestURL:", fullRequestURL)
@@ -335,7 +344,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
-		return nil, fmt.Errorf("setup request header failed: %w", err)
+		return nil, wrapChannelSetupError("setup request header", err)
 	}
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置
@@ -354,12 +363,12 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*websocket.Conn, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
-		return nil, fmt.Errorf("get request url failed: %w", err)
+		return nil, wrapChannelSetupError("get request url", err)
 	}
 	targetHeader := http.Header{}
 	err = a.SetupRequestHeader(c, &targetHeader, info)
 	if err != nil {
-		return nil, fmt.Errorf("setup request header failed: %w", err)
+		return nil, wrapChannelSetupError("setup request header", err)
 	}
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置
