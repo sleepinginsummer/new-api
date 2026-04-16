@@ -144,3 +144,26 @@ func TestAcquireDispatchLeaseReturnsNoAlternativeChannelWhenOnlyExcludedCandidat
 		t.Fatalf("expected ErrNoAlternativeChannel, got %v", err)
 	}
 }
+
+func TestAcquireDispatchLeaseDoesNotQueueWhenNoAlternativeChannelExists(t *testing.T) {
+	resetDispatcherForTest()
+	channel := testChannel(3006, 10, 1)
+	RegisterDispatchTask("exclude-queue", "/v1/chat/completions", "default", "gpt")
+
+	_, err := AcquireDispatchLease(context.Background(), DispatchRequest{
+		TaskID:           "exclude-queue",
+		Group:            "default",
+		Model:            "gpt",
+		Candidates:       []*model.Channel{channel},
+		ExcludeChannelID: channel.Id,
+	})
+	if err != ErrNoAlternativeChannel {
+		t.Fatalf("expected ErrNoAlternativeChannel, got %v", err)
+	}
+
+	dispatcherInstance.mu.Lock()
+	defer dispatcherInstance.mu.Unlock()
+	if len(dispatcherInstance.waiting[dispatcherInstance.shardKey("default", "gpt")]) != 0 {
+		t.Fatal("expected no queued waiters when no alternative channel exists")
+	}
+}

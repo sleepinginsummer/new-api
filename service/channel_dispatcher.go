@@ -106,6 +106,7 @@ type waitingDispatchRequest struct {
 	candidates       []*model.Channel
 	excludeChannelID int
 	notify           chan *DispatchLease
+	notifyErr        chan error
 }
 
 type dispatcher struct {
@@ -241,6 +242,7 @@ func (d *dispatcher) acquire(ctx context.Context, req DispatchRequest) (*Dispatc
 		candidates:       req.Candidates,
 		excludeChannelID: req.ExcludeChannelID,
 		notify:           make(chan *DispatchLease, 1),
+		notifyErr:        make(chan error, 1),
 	}
 
 	d.mu.Lock()
@@ -253,6 +255,10 @@ func (d *dispatcher) acquire(ctx context.Context, req DispatchRequest) (*Dispatc
 	}
 	if errors.Is(err, ErrAllChannelsFailed) {
 		d.markErrorLocked(req.TaskID, err)
+		d.mu.Unlock()
+		return nil, err
+	}
+	if errors.Is(err, ErrNoAlternativeChannel) {
 		d.mu.Unlock()
 		return nil, err
 	}
@@ -272,6 +278,11 @@ func (d *dispatcher) acquire(ctx context.Context, req DispatchRequest) (*Dispatc
 			return nil, ErrDispatchTimeout
 		}
 		return lease, nil
+	case err := <-waiter.notifyErr:
+		if err == nil {
+			return nil, ErrDispatchTimeout
+		}
+		return nil, err
 	case <-ctx.Done():
 		d.mu.Lock()
 		d.removeWaiterLocked(shardKey, waiter)
@@ -399,10 +410,10 @@ func (d *dispatcher) release(channelID int) {
 			}
 			lease, err := d.tryAcquireLocked(waiter)
 			if err != nil {
-				if errors.Is(err, ErrAllChannelsFailed) {
+				if errors.Is(err, ErrAllChannelsFailed) || errors.Is(err, ErrNoAlternativeChannel) {
 					d.markErrorLocked(waiter.taskID, err)
 					select {
-					case waiter.notify <- nil:
+					case waiter.notifyErr <- err:
 					default:
 					}
 					d.waiting[shardKey] = append(queue[:idx], queue[idx+1:]...)
