@@ -175,9 +175,22 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	var existing *ChannelMeta
+	if info != nil && info.ChannelMeta != nil {
+		existing = info.ChannelMeta
+	}
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+	if channelType == 0 && existing != nil {
+		channelType = existing.ChannelType
+	}
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
+	if len(paramOverride) == 0 && existing != nil && len(existing.ParamOverride) > 0 {
+		paramOverride = existing.ParamOverride
+	}
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)
+	if len(headerOverride) == 0 && existing != nil && len(existing.HeadersOverride) > 0 {
+		headerOverride = existing.HeadersOverride
+	}
 	apiType, _ := common.ChannelType2APIType(channelType)
 	channelMeta := &ChannelMeta{
 		ChannelType:          channelType,
@@ -196,22 +209,62 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 		IsModelMapped:        false,
 		SupportStreamOptions: false,
 	}
+	if channelMeta.ChannelId == 0 && existing != nil {
+		channelMeta.ChannelId = existing.ChannelId
+	}
+	if !channelMeta.ChannelIsMultiKey && existing != nil && existing.ChannelIsMultiKey {
+		channelMeta.ChannelIsMultiKey = existing.ChannelIsMultiKey
+	}
+	if channelMeta.ChannelMultiKeyIndex == 0 && existing != nil && existing.ChannelMultiKeyIndex != 0 {
+		channelMeta.ChannelMultiKeyIndex = existing.ChannelMultiKeyIndex
+	}
+	if channelMeta.ChannelBaseUrl == "" && existing != nil {
+		channelMeta.ChannelBaseUrl = existing.ChannelBaseUrl
+	}
+	if channelMeta.ApiType == 0 && existing != nil {
+		channelMeta.ApiType = existing.ApiType
+	}
+	if channelMeta.ApiVersion == "" && existing != nil {
+		channelMeta.ApiVersion = existing.ApiVersion
+	}
+	if channelMeta.ApiKey == "" && existing != nil {
+		channelMeta.ApiKey = existing.ApiKey
+	}
+	if channelMeta.Organization == "" && existing != nil {
+		channelMeta.Organization = existing.Organization
+	}
+	if channelMeta.ChannelCreateTime == 0 && existing != nil {
+		channelMeta.ChannelCreateTime = existing.ChannelCreateTime
+	}
+	if channelMeta.UpstreamModelName == "" && existing != nil {
+		channelMeta.UpstreamModelName = existing.UpstreamModelName
+	}
+	if existing != nil {
+		channelMeta.IsModelMapped = existing.IsModelMapped
+		channelMeta.SupportStreamOptions = existing.SupportStreamOptions
+	}
 
 	if channelType == constant.ChannelTypeAzure {
 		channelMeta.ApiVersion = GetAPIVersion(c)
 	}
 	if channelType == constant.ChannelTypeVertexAi {
-		channelMeta.ApiVersion = c.GetString("region")
+		if region := c.GetString("region"); region != "" {
+			channelMeta.ApiVersion = region
+		}
 	}
 
 	channelSetting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
 	if ok {
 		channelMeta.ChannelSetting = channelSetting
+	} else if existing != nil {
+		channelMeta.ChannelSetting = existing.ChannelSetting
 	}
 
 	channelOtherSettings, ok := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
 	if ok {
 		channelMeta.ChannelOtherSettings = channelOtherSettings
+	} else if existing != nil {
+		channelMeta.ChannelOtherSettings = existing.ChannelOtherSettings
 	}
 
 	if streamSupportedChannels[channelMeta.ChannelType] {

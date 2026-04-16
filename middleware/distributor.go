@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
@@ -372,6 +373,15 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	if newAPIError != nil {
 		return newAPIError
 	}
+	logger.LogInfo(c, fmt.Sprintf(
+		"setup channel context: channel_id=%d channel_type=%d model=%s key_len=%d other_len=%d settings=%+v",
+		channel.Id,
+		channel.Type,
+		modelName,
+		len(strings.TrimSpace(key)),
+		len(channel.Other),
+		channel.GetOtherSettings(),
+	))
 	if channel.ChannelInfo.IsMultiKey {
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, true)
 		common.SetContextKey(c, constant.ContextKeyChannelMultiKeyIndex, index)
