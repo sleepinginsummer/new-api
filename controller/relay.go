@@ -192,10 +192,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for retryParam.GetRetry() <= common.RetryTimes {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		logger.LogInfo(c, fmt.Sprintf(
+			"dispatch acquire start: retry=%d queue_front=%t exclude_channel_id=%d model=%s group=%s last_error=%s",
+			retryParam.GetRetry(),
+			queueFront,
+			excludeChannelID,
+			relayInfo.OriginModelName,
+			relayInfo.TokenGroup,
+			errorStringForLog(relayInfo.LastError),
+		))
 		channel, lease, channelErr := acquireDispatchLease(c, relayInfo, retryParam, requestId, queueFront, excludeChannelID)
 		if channelErr != nil {
 			if queueFront && errors.Is(channelErr, service.ErrNoAlternativeChannel) {
 				// 当前优先级层只有刚失败的渠道可用时，跳过回队重试并推进到下一重试层。
+				logger.LogInfo(c, fmt.Sprintf(
+					"dispatch acquire fallback to next retry: retry=%d reason=%s exclude_channel_id=%d model=%s",
+					retryParam.GetRetry(),
+					channelErr.Error(),
+					excludeChannelID,
+					relayInfo.OriginModelName,
+				))
 				queueFront = false
 				excludeChannelID = 0
 				retryParam.IncreaseRetry()
@@ -205,12 +221,21 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if errors.Is(channelErr, service.ErrAllChannelsFailed) && relayInfo.LastError != nil {
 				// 若此前已拿到更具体的渠道错误，则保留该错误用于返回和队列展示，
 				// 避免被“所有渠道失败”覆盖掉真实失败原因。
+				logger.LogInfo(c, fmt.Sprintf("dispatch acquire preserve last error: %s", relayInfo.LastError.Error()))
 				newAPIError = relayInfo.LastError
 			} else {
 				newAPIError = channelErr
 			}
 			break
 		}
+		logger.LogInfo(c, fmt.Sprintf(
+			"dispatch acquire success: retry=%d channel_id=%d channel_name=%s channel_type=%d model=%s",
+			retryParam.GetRetry(),
+			channel.Id,
+			channel.Name,
+			channel.Type,
+			relayInfo.OriginModelName,
+		))
 		func() {
 			defer lease.Release()
 
@@ -433,6 +458,13 @@ func relayInfoGroup(selectGroup string, fallback string) string {
 		return selectGroup
 	}
 	return fallback
+}
+
+func errorStringForLog(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {

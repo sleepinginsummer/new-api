@@ -139,7 +139,8 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix string) (string, error) {
 	region := GetModelRegion(info.ApiVersion, info.OriginModelName)
-	if !shouldUseAPIKeyMode(info) {
+	useAPIKeyMode := shouldUseAPIKeyMode(info)
+	if !useAPIKeyMode {
 		adc := &Credentials{}
 		if err := common.Unmarshal([]byte(info.ApiKey), adc); err != nil {
 			return "", fmt.Errorf("failed to decode credentials file: %w", err)
@@ -219,6 +220,18 @@ func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix s
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	common.SysLog(fmt.Sprintf(
+		"vertex request url build: channel_id=%d origin_model=%s upstream_model=%s request_mode=%d vertex_key_type=%s inferred_api_key_mode=%t api_key_len=%d api_key_prefix=%q api_version=%q",
+		info.ChannelId,
+		info.OriginModelName,
+		info.UpstreamModelName,
+		a.RequestMode,
+		info.ChannelOtherSettings.VertexKeyType,
+		shouldUseAPIKeyMode(info),
+		len(strings.TrimSpace(info.ApiKey)),
+		maskPrefix(strings.TrimSpace(info.ApiKey), 12),
+		info.ApiVersion,
+	))
 	suffix := ""
 	if a.RequestMode == RequestModeGemini {
 		if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
@@ -261,6 +274,18 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return a.getRequestUrl(info, "", "")
 	}
 	return "", errors.New("unsupported request mode")
+}
+
+// maskPrefix 返回日志安全的前缀摘要，便于排查参数是否为空或被错误覆盖。
+func maskPrefix(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit]
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
