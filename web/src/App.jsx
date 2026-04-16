@@ -41,6 +41,7 @@ import Chat2Link from './pages/Chat2Link';
 import Midjourney from './pages/Midjourney';
 import Pricing from './pages/Pricing';
 import Task from './pages/Task';
+import QueuePage from './pages/Queue';
 import ModelPage from './pages/Model';
 import ModelDeploymentPage from './pages/ModelDeployment';
 import Playground from './pages/Playground';
@@ -303,6 +304,14 @@ function App() {
                 <Midjourney />
               </Suspense>
             </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/queue'
+          element={
+            <AdminRoute>
+              <QueuePage />
+            </AdminRoute>
           }
         />
         <Route

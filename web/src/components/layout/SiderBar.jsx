@@ -45,6 +45,7 @@ const routerMap = {
   detail: '/console',
   pricing: '/pricing',
   task: '/console/task',
+  queue: '/console/queue',
   models: '/console/models',
   deployment: '/console/deployment',
   playground: '/console/playground',
@@ -175,6 +176,12 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('兑换码管理'),
         itemKey: 'redemption',
         to: '/redemption',
+        className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('队列监控'),
+        itemKey: 'queue',
+        to: '/queue',
         className: isAdmin() ? '' : 'tableHiddle',
       },
       {

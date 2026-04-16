@@ -81,10 +81,24 @@ func (p *RetryParam) ResetRetryNextTry() {
 //	Retry=3: GroupB, priority1 (startRetryIndex=2, priorityRetry=1)
 //	         分组B, 优先级1
 func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, error) {
+	channels, selectGroup, err := CacheListSatisfiedChannels(param)
+	if err != nil {
+		return nil, selectGroup, err
+	}
+	if len(channels) == 0 {
+		return nil, selectGroup, nil
+	}
+	channel := model.SelectChannelBySchedulingPolicy(channels)
+	return channel, selectGroup, nil
+}
+
+// CacheListSatisfiedChannels 返回当前重试层内的候选渠道列表。
+func CacheListSatisfiedChannels(param *RetryParam) ([]*model.Channel, string, error) {
 	var channel *model.Channel
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+	var channels []*model.Channel
 
 	if param.TokenGroup == "auto" {
 		if len(setting.GetAutoGroups()) == 0 {
@@ -115,8 +129,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
-			if channel == nil {
+			channels, _ = model.ListSatisfiedChannels(autoGroup, param.ModelName, priorityRetry)
+			if len(channels) == 0 {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
 				logger.LogDebug(param.Ctx, "No available channel in group %s for model %s at priorityRetry %d, trying next group", autoGroup, param.ModelName, priorityRetry)
@@ -153,10 +167,13 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		channels, err = model.ListSatisfiedChannels(param.TokenGroup, param.ModelName, param.GetRetry())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
 	}
-	return channel, selectGroup, nil
+	if channel != nil {
+		channels = []*model.Channel{channel}
+	}
+	return channels, selectGroup, nil
 }

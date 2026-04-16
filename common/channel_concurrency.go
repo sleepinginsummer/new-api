@@ -66,6 +66,31 @@ func getChannelConcurrencyState(channelID int) *channelConcurrencyState {
 	return actual.(*channelConcurrencyState)
 }
 
+// TryAcquireChannelConcurrency 尝试立即申请渠道并发槽位，不会进入等待队列。
+func TryAcquireChannelConcurrency(channelID int, limit int64) (*ChannelConcurrencyLease, bool) {
+	lease := &ChannelConcurrencyLease{
+		channelID: channelID,
+		limit:     limit,
+	}
+	if limit <= 0 {
+		lease.acquired = true
+		return lease, true
+	}
+
+	state := getChannelConcurrencyState(channelID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	state.limit = limit
+	if state.inFlight >= int(limit) {
+		return nil, false
+	}
+
+	state.inFlight++
+	lease.acquired = true
+	return lease, true
+}
+
 // AcquireChannelConcurrency 在真正发起上游请求前申请渠道并发槽位。
 func AcquireChannelConcurrency(ctx context.Context, channelID int, limit int64) (*ChannelConcurrencyLease, error) {
 	lease := &ChannelConcurrencyLease{

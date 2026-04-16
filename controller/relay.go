@@ -183,23 +183,22 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		ModelName:  relayInfo.OriginModelName,
 		Retry:      common.GetPointer(0),
 	}
+	service.RegisterDispatchTask(requestId, c.Request.URL.Path, relayInfo.TokenGroup, relayInfo.OriginModelName)
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
+	requeueCount := 0
+	queueFront := false
+	excludeChannelID := 0
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	for retryParam.GetRetry() <= common.RetryTimes {
 		relayInfo.RetryIndex = retryParam.GetRetry()
-		channel, channelErr := getChannel(c, relayInfo, retryParam)
+		channel, lease, channelErr := acquireDispatchLease(c, relayInfo, retryParam, requestId, queueFront, excludeChannelID)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
 			break
 		}
 		func() {
-			lease, leaseErr := acquireChannelLease(c, channel)
-			if leaseErr != nil {
-				newAPIError = leaseErr
-				return
-			}
 			defer lease.Release()
 
 			addUsedChannel(c, channel.Id)
@@ -229,18 +228,28 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			service.MarkDispatchTaskCompleted(requestId)
 			return
 		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
+		if newAPIError.StatusCode == http.StatusTooManyRequests {
+			service.MarkChannelCooldown(channel.Id, time.Minute)
+		}
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
-			break
+		if shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) && requeueCount == 0 {
+			requeueCount++
+			queueFront = true
+			excludeChannelID = channel.Id
+			service.IncrementDispatchTaskRetry(requestId, newAPIError)
+			continue
 		}
+		break
 	}
+	service.MarkDispatchTaskError(requestId, newAPIError)
 
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
@@ -325,6 +334,35 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	return channel, nil
 }
 
+// getChannelCandidates 获取当前重试层内的候选渠道集合。
+func getChannelCandidates(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) ([]*model.Channel, string, *types.NewAPIError) {
+	if info.ChannelMeta == nil {
+		autoBan := c.GetBool("auto_ban")
+		autoBanInt := 1
+		channelConcurrency, _ := common.GetContextKeyType[int64](c, constant.ContextKeyChannelConcurrency)
+		if !autoBan {
+			autoBanInt = 0
+		}
+		return []*model.Channel{{
+			Id:                 c.GetInt("channel_id"),
+			Type:               c.GetInt("channel_type"),
+			Name:               c.GetString("channel_name"),
+			ChannelConcurrency: &channelConcurrency,
+			AutoBan:            &autoBanInt,
+		}}, "", nil
+	}
+
+	candidates, selectGroup, err := service.CacheListSatisfiedChannels(retryParam)
+	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+	if err != nil {
+		return nil, selectGroup, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if len(candidates) == 0 {
+		return nil, selectGroup, nil
+	}
+	return candidates, selectGroup, nil
+}
+
 // acquireChannelLease 在真正向上游发起请求前申请渠道并发槽位。
 func acquireChannelLease(c *gin.Context, channel *model.Channel) (*common.ChannelConcurrencyLease, *types.NewAPIError) {
 	if channel == nil {
@@ -335,6 +373,48 @@ func acquireChannelLease(c *gin.Context, channel *model.Channel) (*common.Channe
 		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusRequestTimeout, types.ErrOptionWithSkipRetry())
 	}
 	return lease, nil
+}
+
+// acquireDispatchLease 基于统一调度器为当前请求选择渠道并占位。
+func acquireDispatchLease(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam, taskID string, queueFront bool, excludeChannelID int) (*model.Channel, *service.DispatchLease, *types.NewAPIError) {
+	candidates, selectGroup, candidateErr := getChannelCandidates(c, info, retryParam)
+	if candidateErr != nil {
+		return nil, nil, candidateErr
+	}
+	if len(candidates) == 0 {
+		return nil, nil, types.NewError(errors.New("所有渠道失败"), types.ErrorCodeAllChannelsFailed, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusServiceUnavailable))
+	}
+
+	lease, err := service.AcquireDispatchLease(c.Request.Context(), service.DispatchRequest{
+		TaskID:           taskID,
+		RequestPath:      c.Request.URL.Path,
+		Group:            relayInfoGroup(selectGroup, info.TokenGroup),
+		Model:            info.OriginModelName,
+		Candidates:       candidates,
+		QueueFront:       queueFront,
+		ExcludeChannelID: excludeChannelID,
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrAllChannelsFailed) {
+			return nil, nil, types.NewError(errors.New("所有渠道失败"), types.ErrorCodeAllChannelsFailed, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusServiceUnavailable))
+		}
+		return nil, nil, types.NewError(err, types.ErrorCodeDispatchTimeout, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusRequestTimeout))
+	}
+	if lease == nil || lease.Channel == nil {
+		return nil, nil, types.NewError(errors.New("dispatch lease is nil"), types.ErrorCodeDispatchTimeout, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusRequestTimeout))
+	}
+	if setupErr := middleware.SetupContextForSelectedChannel(c, lease.Channel, info.OriginModelName); setupErr != nil {
+		lease.Release()
+		return nil, nil, setupErr
+	}
+	return lease.Channel, lease, nil
+}
+
+func relayInfoGroup(selectGroup string, fallback string) string {
+	if selectGroup != "" {
+		return selectGroup
+	}
+	return fallback
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {

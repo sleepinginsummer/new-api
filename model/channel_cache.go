@@ -93,9 +93,29 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+	channels, err := ListSatisfiedChannels(group, model, retry)
+	if err != nil {
+		return nil, err
+	}
+	selectedChannel := selectChannelBySchedulingPolicy(channels)
+	if selectedChannel != nil {
+		return selectedChannel, nil
+	}
+	return nil, errors.New("channel not found")
+}
+
+// ListSatisfiedChannels 返回当前重试层内满足条件的候选渠道列表。
+func ListSatisfiedChannels(group string, model string, retry int) ([]*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		channel, err := GetChannel(group, model, retry)
+		if err != nil {
+			return nil, err
+		}
+		if channel == nil {
+			return nil, nil
+		}
+		return []*Channel{channel}, nil
 	}
 
 	channelSyncLock.RLock()
@@ -116,7 +136,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 
 	if len(channels) == 1 {
 		if channel, ok := channelsIDM[channels[0]]; ok {
-			return channel, nil
+			return []*Channel{channel}, nil
 		}
 		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
 	}
@@ -154,13 +174,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	if len(targetChannels) == 0 {
 		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
 	}
-
-	selectedChannel := selectChannelBySchedulingPolicy(targetChannels)
-	if selectedChannel != nil {
-		return selectedChannel, nil
-	}
-	// return null if no channel is not found
-	return nil, errors.New("channel not found")
+	return targetChannels, nil
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

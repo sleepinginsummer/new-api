@@ -53,6 +53,11 @@ func selectChannelBySchedulingPolicy(channels []*Channel) *Channel {
 	return selectFromQueuedCandidates(limitedQueued)
 }
 
+// SelectChannelBySchedulingPolicy 导出给 service 层复用当前调度策略。
+func SelectChannelBySchedulingPolicy(channels []*Channel) *Channel {
+	return selectChannelBySchedulingPolicy(channels)
+}
+
 // selectFromIdleCandidates 先按空闲槽位降序，再按排队数升序，最后按权重打散。
 func selectFromIdleCandidates(candidates []scheduledChannelCandidate) *Channel {
 	if len(candidates) == 0 {
