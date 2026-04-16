@@ -380,6 +380,17 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 // getChannelCandidates 获取当前重试层内的候选渠道集合。
 func getChannelCandidates(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) ([]*model.Channel, string, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
+		channelID := c.GetInt("channel_id")
+		if channelID > 0 {
+			channel, err := model.CacheGetChannel(channelID)
+			if err != nil {
+				return nil, "", types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+			if channel != nil {
+				return []*model.Channel{channel}, "", nil
+			}
+		}
+
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
 		channelConcurrency, _ := common.GetContextKeyType[int64](c, constant.ContextKeyChannelConcurrency)
