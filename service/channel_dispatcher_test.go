@@ -125,3 +125,22 @@ func TestAcquireDispatchLeaseReturnsAllChannelsFailedWhenCoolingDown(t *testing.
 		t.Fatalf("expected ErrAllChannelsFailed, got %v", err)
 	}
 }
+
+func TestAcquireDispatchLeaseReturnsNoAlternativeChannelWhenOnlyExcludedCandidateRemains(t *testing.T) {
+	resetDispatcherForTest()
+	channel := testChannel(3005, 10, 1)
+
+	_, err := AcquireDispatchLease(context.Background(), DispatchRequest{
+		TaskID:           "exclude-1",
+		Group:            "default",
+		Model:            "gpt",
+		Candidates:       []*model.Channel{channel},
+		ExcludeChannelID: channel.Id,
+	})
+	if err == nil {
+		t.Fatal("expected no alternative channel error")
+	}
+	if err != ErrNoAlternativeChannel {
+		t.Fatalf("expected ErrNoAlternativeChannel, got %v", err)
+	}
+}

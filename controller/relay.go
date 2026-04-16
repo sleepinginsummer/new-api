@@ -194,8 +194,21 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		channel, lease, channelErr := acquireDispatchLease(c, relayInfo, retryParam, requestId, queueFront, excludeChannelID)
 		if channelErr != nil {
+			if queueFront && errors.Is(channelErr, service.ErrNoAlternativeChannel) {
+				// 当前优先级层只有刚失败的渠道可用时，跳过回队重试并推进到下一重试层。
+				queueFront = false
+				excludeChannelID = 0
+				retryParam.IncreaseRetry()
+				continue
+			}
 			logger.LogError(c, channelErr.Error())
-			newAPIError = channelErr
+			if errors.Is(channelErr, service.ErrAllChannelsFailed) && relayInfo.LastError != nil {
+				// 若此前已拿到更具体的渠道错误，则保留该错误用于返回和队列展示，
+				// 避免被“所有渠道失败”覆盖掉真实失败原因。
+				newAPIError = relayInfo.LastError
+			} else {
+				newAPIError = channelErr
+			}
 			break
 		}
 		func() {

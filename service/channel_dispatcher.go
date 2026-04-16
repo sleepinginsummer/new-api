@@ -16,6 +16,8 @@ import (
 var (
 	// ErrAllChannelsFailed 表示当前请求的全部候选渠道都处于不可用状态。
 	ErrAllChannelsFailed = errors.New("all channels failed")
+	// ErrNoAlternativeChannel 表示当前层存在候选渠道，但在排除刚失败渠道后已无可尝试的替代渠道。
+	ErrNoAlternativeChannel = errors.New("no alternative channel")
 	// ErrDispatchTimeout 表示调度等待超时或被取消。
 	ErrDispatchTimeout = errors.New("dispatch timeout")
 )
@@ -279,9 +281,13 @@ func (d *dispatcher) acquire(ctx context.Context, req DispatchRequest) (*Dispatc
 }
 
 func (d *dispatcher) tryAcquireLocked(waiter *waitingDispatchRequest) (*DispatchLease, error) {
+	baseAvailable := d.filterAvailableCandidatesLocked(waiter.candidates, 0)
+	if len(baseAvailable) == 0 {
+		return nil, ErrAllChannelsFailed
+	}
 	available := d.filterAvailableCandidatesLocked(waiter.candidates, waiter.excludeChannelID)
 	if len(available) == 0 {
-		return nil, ErrAllChannelsFailed
+		return nil, ErrNoAlternativeChannel
 	}
 	channel := d.pickChannelLocked(waiter.group, waiter.model, available)
 	if channel == nil {

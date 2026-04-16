@@ -53,6 +53,20 @@ type Adaptor struct {
 	AccountCredentials Credentials
 }
 
+// shouldUseAPIKeyMode 判断 Vertex 渠道当前是否应按 API Key 模式请求。
+// 当运行时未正确携带 vertex_key_type 时，这里会根据 key 内容兜底识别，
+// 避免把普通 API Key 误当作 JSON 凭证文件解析。
+func shouldUseAPIKeyMode(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	if info.ChannelOtherSettings.VertexKeyType == dto.VertexKeyTypeAPIKey {
+		return true
+	}
+	apiKey := strings.TrimSpace(info.ApiKey)
+	return apiKey != "" && !strings.HasPrefix(apiKey, "{")
+}
+
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
 	// Vertex AI does not support functionResponse.id; keep it stripped here for consistency.
 	if model_setting.GetGeminiSettings().RemoveFunctionResponseIdEnabled {
@@ -125,7 +139,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix string) (string, error) {
 	region := GetModelRegion(info.ApiVersion, info.OriginModelName)
-	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
+	if !shouldUseAPIKeyMode(info) {
 		adc := &Credentials{}
 		if err := common.Unmarshal([]byte(info.ApiKey), adc); err != nil {
 			return "", fmt.Errorf("failed to decode credentials file: %w", err)
@@ -251,7 +265,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
+	if !shouldUseAPIKeyMode(info) {
 		accessToken, err := getAccessToken(a, info)
 		if err != nil {
 			return err
