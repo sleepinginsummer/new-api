@@ -240,14 +240,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) && requeueCount == 0 {
+		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+			break
+		}
+		if requeueCount == 0 {
 			requeueCount++
 			queueFront = true
 			excludeChannelID = channel.Id
 			service.IncrementDispatchTaskRetry(requestId, newAPIError)
 			continue
 		}
-		break
+		queueFront = false
+		excludeChannelID = 0
+		retryParam.IncreaseRetry()
 	}
 	service.MarkDispatchTaskError(requestId, newAPIError)
 
