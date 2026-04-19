@@ -68,6 +68,76 @@ type TaskAdaptor struct {
 	baseURL     string
 }
 
+// shouldUseAPIKeyMode 判断当前 Vertex Veo 任务是否应使用 API Key 鉴权。
+// 这里与普通 Vertex 适配器保持一致：优先读取显式配置，缺失时再根据 key 内容兜底识别。
+func shouldUseAPIKeyMode(info *relaycommon.RelayInfo, rawKey string) bool {
+	if info != nil && info.ChannelOtherSettings.VertexKeyType == dto.VertexKeyTypeAPIKey {
+		return true
+	}
+	key := strings.TrimSpace(rawKey)
+	return key != "" && !strings.HasPrefix(key, "{")
+}
+
+// appendAPIKeyToURL 为 Vertex API Key 模式拼接 query 参数。
+func appendAPIKeyToURL(rawURL string, apiKey string) string {
+	if strings.TrimSpace(apiKey) == "" {
+		return rawURL
+	}
+	if strings.Contains(rawURL, "?") {
+		return rawURL + "&key=" + apiKey
+	}
+	return rawURL + "?key=" + apiKey
+}
+
+// getEffectiveRegion 返回当前模型的 Vertex 区域配置。
+func getEffectiveRegion(info *relaycommon.RelayInfo, modelName string) string {
+	region := vertexcore.GetModelRegion(info.ApiVersion, modelName)
+	if strings.TrimSpace(region) == "" {
+		return "global"
+	}
+	return region
+}
+
+// getAPIKeyProjectID 返回 API Key 模式下的 Vertex 项目 ID。
+func getAPIKeyProjectID(info *relaycommon.RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	return strings.TrimSpace(info.ChannelOtherSettings.VertexProjectID)
+}
+
+// buildVertexProjectURL 构造带项目上下文的 Vertex 请求 URL。
+func buildVertexProjectURL(projectID, region, modelName, action string) string {
+	if region == "global" {
+		return fmt.Sprintf(
+			"https://aiplatform.googleapis.com/v1/projects/%s/locations/global/publishers/google/models/%s:%s",
+			projectID,
+			modelName,
+			action,
+		)
+	}
+	return fmt.Sprintf(
+		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
+		region,
+		projectID,
+		region,
+		modelName,
+		action,
+	)
+}
+
+// wrapAPIKeyProjectError 将 API Key 模式下的项目配置错误转换为可读提示。
+func wrapAPIKeyProjectError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "RESOURCE_PROJECT_INVALID") {
+		return fmt.Errorf("vertex api_key 模式项目配置无效，请检查 vertex_project_id、API Key 所属项目以及 Vertex AI/Veo 权限: %w", err)
+	}
+	return err
+}
+
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
@@ -82,39 +152,35 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	adc := &vertexcore.Credentials{}
-	if err := common.Unmarshal([]byte(a.apiKey), adc); err != nil {
-		return "", fmt.Errorf("failed to decode credentials: %w", err)
-	}
 	modelName := info.UpstreamModelName
 	if modelName == "" {
 		modelName = "veo-3.0-generate-001"
 	}
 
-	region := vertexcore.GetModelRegion(info.ApiVersion, modelName)
-	if strings.TrimSpace(region) == "" {
-		region = "global"
+	region := getEffectiveRegion(info, modelName)
+
+	if shouldUseAPIKeyMode(info, a.apiKey) {
+		projectID := getAPIKeyProjectID(info)
+		if projectID == "" {
+			return "", fmt.Errorf("vertex api_key 模式缺少 vertex_project_id 配置")
+		}
+		url := buildVertexProjectURL(projectID, region, modelName, "predictLongRunning")
+		return appendAPIKeyToURL(url, a.apiKey), nil
 	}
-	if region == "global" {
-		return fmt.Sprintf(
-			"https://aiplatform.googleapis.com/v1/projects/%s/locations/global/publishers/google/models/%s:predictLongRunning",
-			adc.ProjectID,
-			modelName,
-		), nil
-	}
-	return fmt.Sprintf(
-		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predictLongRunning",
-		region,
-		adc.ProjectID,
-		region,
-		modelName,
-	), nil
+
+	var url string
+	url = buildVertexProjectURL(resolveProjectID(a.apiKey), region, modelName, "predictLongRunning")
+	return url, nil
 }
 
 // BuildRequestHeader sets required headers.
 func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+
+	if shouldUseAPIKeyMode(info, a.apiKey) {
+		return nil
+	}
 
 	adc := &vertexcore.Credentials{}
 	if err := common.Unmarshal([]byte(a.apiKey), adc); err != nil {
@@ -200,7 +266,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 
 // DoRequest delegates to common helper.
 func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error) {
-	return channel.DoTaskApiRequest(a, c, info, requestBody)
+	resp, err := channel.DoTaskApiRequest(a, c, info, requestBody)
+	if err != nil {
+		return nil, wrapAPIKeyProjectError(err)
+	}
+	return resp, nil
 }
 
 // DoResponse handles upstream response, returns taskID etc.
@@ -258,32 +328,34 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, fmt.Errorf("cannot extract project/model from operation name")
 	}
 	var url string
-	if region == "global" {
-		url = fmt.Sprintf("https://aiplatform.googleapis.com/v1/projects/%s/locations/global/publishers/google/models/%s:fetchPredictOperation", project, modelName)
-	} else {
-		url = fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:fetchPredictOperation", region, project, region, modelName)
-	}
+	url = buildVertexProjectURL(project, region, modelName, "fetchPredictOperation")
 	payload := fetchOperationPayload{OperationName: upstreamName}
 	data, err := common.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	adc := &vertexcore.Credentials{}
-	if err := common.Unmarshal([]byte(key), adc); err != nil {
-		return nil, fmt.Errorf("failed to decode credentials: %w", err)
+	reqURL := url
+	if strings.TrimSpace(key) != "" && !strings.HasPrefix(strings.TrimSpace(key), "{") {
+		reqURL = appendAPIKeyToURL(reqURL, key)
 	}
-	token, err := vertexcore.AcquireAccessToken(*adc, proxy)
-	if err != nil {
-		return nil, fmt.Errorf("failed to acquire access token: %w", err)
-	}
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	req, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("x-goog-user-project", adc.ProjectID)
+	if reqURL == url {
+		adc := &vertexcore.Credentials{}
+		if err := common.Unmarshal([]byte(key), adc); err != nil {
+			return nil, fmt.Errorf("failed to decode credentials: %w", err)
+		}
+		token, err := vertexcore.AcquireAccessToken(*adc, proxy)
+		if err != nil {
+			return nil, fmt.Errorf("failed to acquire access token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("x-goog-user-project", adc.ProjectID)
+	}
 	client, err := service.GetHttpClientWithProxy(proxy)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
@@ -421,4 +493,13 @@ func extractProjectFromOperationName(name string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// resolveProjectID 从 Vertex 服务账号 JSON 中解析项目 ID。
+func resolveProjectID(rawKey string) string {
+	adc := &vertexcore.Credentials{}
+	if err := common.Unmarshal([]byte(rawKey), adc); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(adc.ProjectID)
 }

@@ -223,7 +223,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(resp.Body)
-		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
+		message := string(responseBody)
+		if info.ChannelType == constant.ChannelTypeVertexAi &&
+			info.ChannelOtherSettings.VertexKeyType == dto.VertexKeyTypeAPIKey &&
+			strings.Contains(message, "RESOURCE_PROJECT_INVALID") {
+			message = fmt.Sprintf(
+				"vertex api_key 模式项目配置无效，请检查 vertex_project_id、API Key 所属项目以及 Vertex AI/Veo 权限: %s",
+				message,
+			)
+		}
+		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", message), "fail_to_fetch_task", resp.StatusCode)
 	}
 
 	// 10. 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）

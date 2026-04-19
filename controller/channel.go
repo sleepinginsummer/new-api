@@ -490,6 +490,11 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		if regionMap["default"] == nil {
 			return fmt.Errorf("部署地区必须包含default字段")
 		}
+
+		if channel.GetOtherSettings().VertexKeyType == dto.VertexKeyTypeAPIKey &&
+			strings.TrimSpace(channel.GetOtherSettings().VertexProjectID) == "" {
+			return fmt.Errorf("Vertex API Key 模式必须填写 Project ID")
+		}
 	}
 
 	// Codex OAuth key validation (optional, only when JSON object is provided)
