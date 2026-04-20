@@ -401,6 +401,16 @@ func (Task *Task) Update() error {
 	return err
 }
 
+// DeleteExpiredAsyncChatTasks 删除超过保留时间的异步 chat 任务日志。
+func DeleteExpiredAsyncChatTasks(action string, expireBefore int64) error {
+	if action == "" {
+		return nil
+	}
+	query := DB.Where("action = ?", action).
+		Where("submit_time < ?", expireBefore)
+	return query.Delete(&Task{}).Error
+}
+
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Returns (true, nil) if this caller won the update, (false, nil) if
 // another process already moved the task out of fromStatus.

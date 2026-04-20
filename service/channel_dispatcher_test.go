@@ -34,8 +34,8 @@ func TestAcquireDispatchLeaseRoundRobin(t *testing.T) {
 
 	one := testChannel(3001, 10, 1)
 	two := testChannel(3002, 10, 1)
-	RegisterDispatchTask("rr-1", "/v1/chat/completions", "default", "gpt")
-	RegisterDispatchTask("rr-2", "/v1/chat/completions", "default", "gpt")
+	RegisterDispatchTask("rr-1", "/v1/chat/completions", "default", "gpt", DispatchTaskModeSync)
+	RegisterDispatchTask("rr-2", "/v1/chat/completions", "default", "gpt", DispatchTaskModeSync)
 
 	first, err := AcquireDispatchLease(context.Background(), DispatchRequest{
 		TaskID:     "rr-1",
@@ -68,8 +68,8 @@ func TestAcquireDispatchLeaseWaitsForRelease(t *testing.T) {
 	resetDispatcherForTest()
 	common.DeleteChannelConcurrencyState(3003)
 	channel := testChannel(3003, 10, 1)
-	RegisterDispatchTask("queue-1", "/v1/chat/completions", "default", "gpt")
-	RegisterDispatchTask("queue-2", "/v1/chat/completions", "default", "gpt")
+	RegisterDispatchTask("queue-1", "/v1/chat/completions", "default", "gpt", DispatchTaskModeSync)
+	RegisterDispatchTask("queue-2", "/v1/chat/completions", "default", "gpt", DispatchTaskModeSync)
 
 	first, err := AcquireDispatchLease(context.Background(), DispatchRequest{
 		TaskID:     "queue-1",
@@ -148,7 +148,7 @@ func TestAcquireDispatchLeaseReturnsNoAlternativeChannelWhenOnlyExcludedCandidat
 func TestAcquireDispatchLeaseDoesNotQueueWhenNoAlternativeChannelExists(t *testing.T) {
 	resetDispatcherForTest()
 	channel := testChannel(3006, 10, 1)
-	RegisterDispatchTask("exclude-queue", "/v1/chat/completions", "default", "gpt")
+	RegisterDispatchTask("exclude-queue", "/v1/chat/completions", "default", "gpt", DispatchTaskModeSync)
 
 	_, err := AcquireDispatchLease(context.Background(), DispatchRequest{
 		TaskID:           "exclude-queue",
@@ -165,5 +165,25 @@ func TestAcquireDispatchLeaseDoesNotQueueWhenNoAlternativeChannelExists(t *testi
 	defer dispatcherInstance.mu.Unlock()
 	if len(dispatcherInstance.waiting[dispatcherInstance.shardKey("default", "gpt")]) != 0 {
 		t.Fatal("expected no queued waiters when no alternative channel exists")
+	}
+}
+
+func TestDispatchTaskAsyncHistoryTTL(t *testing.T) {
+	resetDispatcherForTest()
+
+	RegisterDispatchTask("async-1", "/v1/chat/completions/async", "default", "gpt", DispatchTaskModeAsync)
+	MarkDispatchTaskCompleted("async-1")
+
+	dispatcherInstance.mu.Lock()
+	record := dispatcherInstance.tasks["async-1"]
+	dispatcherInstance.mu.Unlock()
+
+	if record == nil {
+		t.Fatal("expected async dispatch task record to exist")
+	}
+
+	got := record.HistoryUntil.Sub(record.CompletedAt)
+	if got < dispatchAsyncHistoryTTL-time.Second || got > dispatchAsyncHistoryTTL+time.Second {
+		t.Fatalf("expected async history ttl around %v, got %v", dispatchAsyncHistoryTTL, got)
 	}
 }

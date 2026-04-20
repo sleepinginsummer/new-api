@@ -27,7 +27,10 @@ const (
 	DispatchTaskStatusInProgress = "in_progress"
 	DispatchTaskStatusCompleted  = "completed"
 	DispatchTaskStatusError      = "error"
+	DispatchTaskModeSync         = "sync"
+	DispatchTaskModeAsync        = "async"
 	dispatchHistoryTTL           = 20 * time.Minute
+	dispatchAsyncHistoryTTL      = 2 * time.Hour
 	dispatchCooldownDuration     = time.Minute
 )
 
@@ -65,6 +68,7 @@ func (l *DispatchLease) Release() {
 type DispatchTaskSnapshot struct {
 	TaskID             string `json:"task_id"`
 	RequestPath        string `json:"request_path"`
+	Mode               string `json:"mode"`
 	Model              string `json:"model"`
 	Group              string `json:"group"`
 	Status             string `json:"status"`
@@ -84,6 +88,7 @@ type DispatchTaskSnapshot struct {
 type dispatchTaskRecord struct {
 	TaskID       string
 	RequestPath  string
+	Mode         string
 	Model        string
 	Group        string
 	Status       string
@@ -126,8 +131,8 @@ var dispatcherInstance = &dispatcher{
 }
 
 // RegisterDispatchTask 初始化一个调度任务快照。
-func RegisterDispatchTask(taskID string, requestPath string, group string, model string) {
-	dispatcherInstance.registerTask(taskID, requestPath, group, model)
+func RegisterDispatchTask(taskID string, requestPath string, group string, model string, mode string) {
+	dispatcherInstance.registerTask(taskID, requestPath, group, model, mode)
 }
 
 // MarkDispatchTaskCompleted 标记任务成功完成。
@@ -160,7 +165,8 @@ func ListDispatchTaskSnapshots(status string, modelName string, channelID int, p
 	return dispatcherInstance.listSnapshots(status, modelName, channelID, page, pageSize)
 }
 
-func (d *dispatcher) registerTask(taskID string, requestPath string, group string, model string) {
+// registerTask 初始化或刷新调度快照。
+func (d *dispatcher) registerTask(taskID string, requestPath string, group string, model string, mode string) {
 	if taskID == "" {
 		return
 	}
@@ -173,6 +179,7 @@ func (d *dispatcher) registerTask(taskID string, requestPath string, group strin
 		record = &dispatchTaskRecord{
 			TaskID:      taskID,
 			RequestPath: requestPath,
+			Mode:        normalizeDispatchTaskMode(mode),
 			Group:       group,
 			Model:       model,
 			Status:      DispatchTaskStatusInProgress,
@@ -181,6 +188,7 @@ func (d *dispatcher) registerTask(taskID string, requestPath string, group strin
 		d.tasks[taskID] = record
 	}
 	record.RequestPath = requestPath
+	record.Mode = normalizeDispatchTaskMode(mode)
 	record.Group = group
 	record.Model = model
 	record.UpdatedAt = now
@@ -204,7 +212,7 @@ func (d *dispatcher) completeTask(taskID string) {
 	record.Status = DispatchTaskStatusCompleted
 	record.CompletedAt = now
 	record.UpdatedAt = now
-	record.HistoryUntil = now.Add(dispatchHistoryTTL)
+	record.HistoryUntil = now.Add(dispatchHistoryTTLForMode(record.Mode))
 }
 
 func (d *dispatcher) failTask(taskID string, err error) {
@@ -216,7 +224,7 @@ func (d *dispatcher) failTask(taskID string, err error) {
 	record.LastError = errorString(err)
 	record.CompletedAt = now
 	record.UpdatedAt = now
-	record.HistoryUntil = now.Add(dispatchHistoryTTL)
+	record.HistoryUntil = now.Add(dispatchHistoryTTLForMode(record.Mode))
 }
 
 func (d *dispatcher) ensureTaskLocked(taskID string) *dispatchTaskRecord {
@@ -484,7 +492,7 @@ func (d *dispatcher) markErrorLocked(taskID string, err error) {
 	record.LastError = errorString(err)
 	record.CompletedAt = now
 	record.UpdatedAt = now
-	record.HistoryUntil = now.Add(dispatchHistoryTTL)
+	record.HistoryUntil = now.Add(dispatchHistoryTTLForMode(record.Mode))
 }
 
 func (d *dispatcher) listSnapshots(status string, modelName string, channelID int, page int, pageSize int) ([]DispatchTaskSnapshot, int) {
@@ -552,6 +560,7 @@ func snapshotFromRecord(task *dispatchTaskRecord, now time.Time) DispatchTaskSna
 	snapshot := DispatchTaskSnapshot{
 		TaskID:      task.TaskID,
 		RequestPath: task.RequestPath,
+		Mode:        normalizeDispatchTaskMode(task.Mode),
 		Model:       task.Model,
 		Group:       task.Group,
 		Status:      task.Status,
@@ -586,6 +595,22 @@ func snapshotFromRecord(task *dispatchTaskRecord, now time.Time) DispatchTaskSna
 		snapshot.ProcessingDuration = processEnd.Sub(task.StartedAt).Milliseconds()
 	}
 	return snapshot
+}
+
+// normalizeDispatchTaskMode 统一调度快照模式值，避免出现空值或未知值。
+func normalizeDispatchTaskMode(mode string) string {
+	if mode == DispatchTaskModeAsync {
+		return DispatchTaskModeAsync
+	}
+	return DispatchTaskModeSync
+}
+
+// dispatchHistoryTTLForMode 根据同步/异步模式返回对应历史保留时间。
+func dispatchHistoryTTLForMode(mode string) time.Duration {
+	if normalizeDispatchTaskMode(mode) == DispatchTaskModeAsync {
+		return dispatchAsyncHistoryTTL
+	}
+	return dispatchHistoryTTL
 }
 
 func containsChannel(channels []*model.Channel, channelID int) bool {

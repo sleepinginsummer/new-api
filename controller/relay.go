@@ -67,6 +67,14 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
+	dispatchTaskID := c.GetString("dispatch_task_id")
+	if dispatchTaskID == "" {
+		dispatchTaskID = requestId
+	}
+	dispatchMode := c.GetString("dispatch_mode")
+	if dispatchMode == "" {
+		dispatchMode = service.DispatchTaskModeSync
+	}
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
@@ -183,7 +191,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		ModelName:  relayInfo.OriginModelName,
 		Retry:      common.GetPointer(0),
 	}
-	service.RegisterDispatchTask(requestId, c.Request.URL.Path, relayInfo.TokenGroup, relayInfo.OriginModelName)
+	service.RegisterDispatchTask(dispatchTaskID, c.Request.URL.Path, relayInfo.TokenGroup, relayInfo.OriginModelName, dispatchMode)
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 	requeueCount := 0
@@ -201,7 +209,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			relayInfo.TokenGroup,
 			errorStringForLog(relayInfo.LastError),
 		))
-		channel, lease, channelErr := acquireDispatchLease(c, relayInfo, retryParam, requestId, queueFront, excludeChannelID)
+		channel, lease, channelErr := acquireDispatchLease(c, relayInfo, retryParam, dispatchTaskID, queueFront, excludeChannelID)
 		if channelErr != nil {
 			if queueFront && errors.Is(channelErr, service.ErrNoAlternativeChannel) {
 				// 当前优先级层只有刚失败的渠道可用时，跳过回队重试并推进到下一重试层。
@@ -266,7 +274,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
-			service.MarkDispatchTaskCompleted(requestId)
+			service.MarkDispatchTaskCompleted(dispatchTaskID)
 			return
 		}
 
@@ -285,14 +293,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			requeueCount++
 			queueFront = true
 			excludeChannelID = channel.Id
-			service.IncrementDispatchTaskRetry(requestId, newAPIError)
+			service.IncrementDispatchTaskRetry(dispatchTaskID, newAPIError)
 			continue
 		}
 		queueFront = false
 		excludeChannelID = 0
 		retryParam.IncreaseRetry()
 	}
-	service.MarkDispatchTaskError(requestId, newAPIError)
+	service.MarkDispatchTaskError(dispatchTaskID, newAPIError)
 
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {

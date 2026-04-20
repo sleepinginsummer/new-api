@@ -35,6 +35,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import {
+  TASK_ACTION_ASYNC_CHAT_COMPLETION,
   TASK_ACTION_FIRST_TAIL_GENERATE,
   TASK_ACTION_GENERATE,
   TASK_ACTION_REFERENCE_GENERATE,
@@ -132,6 +133,12 @@ const renderType = (type, t) => {
       return (
         <Tag color='blue' shape='circle' prefixIcon={<Sparkles size={14} />}>
           {t('视频Remix')}
+        </Tag>
+      );
+    case TASK_ACTION_ASYNC_CHAT_COMPLETION:
+      return (
+        <Tag color='purple' shape='circle' prefixIcon={<Sparkles size={14} />}>
+          {t('异步绘图')}
         </Tag>
       );
     default:

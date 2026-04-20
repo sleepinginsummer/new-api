@@ -45,6 +45,11 @@ const statusLabelMap = {
   error: '错误',
 };
 
+const modeLabelMap = {
+  sync: '同步',
+  async: '异步',
+};
+
 function formatDuration(ms) {
   if (ms === null || ms === undefined || ms < 0) return '-';
   const totalSeconds = Math.floor(ms / 1000);
@@ -119,6 +124,15 @@ const QueuePage = () => {
     {
       title: t('模型'),
       dataIndex: 'model',
+    },
+    {
+      title: t('模式'),
+      dataIndex: 'mode',
+      render: (value) => (
+        <Tag color={value === 'async' ? 'purple' : 'cyan'} shape='circle'>
+          {t(modeLabelMap[value] || '同步')}
+        </Tag>
+      ),
     },
     {
       title: t('分组'),

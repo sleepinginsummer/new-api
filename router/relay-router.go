@@ -80,6 +80,19 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 	}
 	{
+		asyncChatPollRouter := relayV1Router.Group("")
+		{
+			asyncChatPollRouter.GET("/chat/completions/async/:uuid", controller.RelayAsyncChatPoll)
+		}
+	}
+	{
+		asyncChatSubmitRouter := relayV1Router.Group("")
+		asyncChatSubmitRouter.Use(middleware.Distribute())
+		{
+			asyncChatSubmitRouter.POST("/chat/completions/async", controller.RelayAsyncChatSubmit)
+		}
+	}
+	{
 		//http router
 		httpRouter := relayV1Router.Group("")
 		httpRouter.Use(middleware.Distribute())
