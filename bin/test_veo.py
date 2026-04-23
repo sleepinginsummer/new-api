@@ -23,6 +23,7 @@ from urllib import error, request
 
 
 DEFAULT_BASE_URL = "https://ai3.sleepinsum.com"
+DEFAULT_API_KEY = "sk-PcldzS1wvLh0BicvsXI9cM28GhdmtcpqxgpeKHVwtSR7oOAc"
 DEFAULT_MODEL = "veo-3.0-generate-001"
 DEFAULT_PROMPT = "一只白色机械猫在雨夜霓虹街道行走，电影感镜头，16:9，动态追踪拍摄。"
 DEFAULT_SIZE = "1280x720"
@@ -156,7 +157,7 @@ def download_video(base_url: str, api_key: str, task_id: str, output_path: Path)
 
 def main() -> int:
     """脚本入口。"""
-    api_key = os.getenv("NEW_API_KEY", "").strip()
+    api_key = os.getenv("NEW_API_KEY", DEFAULT_API_KEY).strip()
     base_url = os.getenv("NEW_API_BASE_URL", DEFAULT_BASE_URL).strip()
     model = os.getenv("NEW_API_MODEL", DEFAULT_MODEL).strip()
     prompt = os.getenv("NEW_API_PROMPT", DEFAULT_PROMPT).strip()
@@ -169,11 +170,6 @@ def main() -> int:
     output_path = Path(
         os.getenv("NEW_API_OUTPUT", f"/tmp/{model.replace('/', '_')}_{int(time.time())}.mp4").strip()
     )
-
-    if not api_key:
-        print("请先设置环境变量 NEW_API_KEY", file=sys.stderr)
-        print("示例：export NEW_API_KEY='sk-xxxxx'", file=sys.stderr)
-        return 1
 
     print("[提交任务]")
     print(f"base_url={base_url}")

@@ -12,12 +12,18 @@
 """
 
 import argparse
+import base64
 import json
+import re
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict
 
 import requests
+
+
+MARKDOWN_DATA_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\((data:image/[^)]+)\)")
 
 
 def build_headers(api_key: str) -> Dict[str, str]:
@@ -63,7 +69,7 @@ def poll_task(base_url: str, api_key: str, task_id: str, timeout: int, poll_inte
 
         data = response.json()
         status = data.get("status")
-        print(json.dumps(data, ensure_ascii=False, indent=2))
+        print_poll_payload(data)
 
         if status == "processing":
             time.sleep(poll_interval)
@@ -77,6 +83,86 @@ def poll_task(base_url: str, api_key: str, task_id: str, timeout: int, poll_inte
     raise TimeoutError(f"poll timeout after {timeout}s")
 
 
+def save_base64_image(image_base64: str, task_id: str) -> Path:
+    """将 base64 图片保存到脚本同级目录。"""
+    script_dir = Path(__file__).resolve().parent
+    image_bytes = base64.b64decode(image_base64)
+    output_path = script_dir / f"async_chat_{task_id}.png"
+    output_path.write_bytes(image_bytes)
+    return output_path
+
+
+def extract_data_image_url(text: str) -> str | None:
+    """从字符串中提取 data:image URL。"""
+    if text.startswith("data:image"):
+        return text
+
+    match = MARKDOWN_DATA_IMAGE_PATTERN.search(text)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def extract_image_base64(data: Dict[str, Any]) -> str | None:
+    """从响应中提取图片 base64 内容。"""
+    choices = data.get("choices") or []
+    if not choices:
+        return None
+
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+
+    if isinstance(content, str):
+        data_image_url = extract_data_image_url(content)
+        if data_image_url:
+            _, _, encoded = data_image_url.partition(",")
+            return encoded or None
+        return None
+
+    if not isinstance(content, list):
+        return None
+
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+
+        image_url = item.get("image_url")
+        if isinstance(image_url, dict):
+            url = image_url.get("url")
+            if isinstance(url, str) and url.startswith("data:image"):
+                _, _, encoded = url.partition(",")
+                if encoded:
+                    return encoded
+
+        for key in ("b64_json", "image_base64"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+    return None
+
+
+def print_poll_payload(data: Dict[str, Any]) -> None:
+    """按状态输出轮询响应，避免完整打印大块 base64。"""
+    status = data.get("status")
+    if status in ("processing", "error"):
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    image_base64 = extract_image_base64(data)
+    if image_base64:
+        summary = {
+            "id": data.get("id"),
+            "object": data.get("object"),
+            "created": data.get("created"),
+            "image_base64_prefix": image_base64[:50],
+        }
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
+
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
 def print_summary(result: Dict[str, Any]) -> None:
     """输出最终响应摘要。"""
     status = result["status"]
@@ -87,22 +173,31 @@ def print_summary(result: Dict[str, Any]) -> None:
         print(f"[result] error: {error_info.get('message', 'unknown error')}")
         return
 
+    image_base64 = extract_image_base64(data)
+    if image_base64:
+        task_id = str(data.get("id") or "unknown")
+        output_path = save_base64_image(image_base64, task_id)
+        print(f"[result] completed, image base64 prefix: {image_base64[:50]}")
+        print(f"[result] image saved to: {output_path}")
+        return
+
     choices = data.get("choices") or []
-    if choices:
-        message = choices[0].get("message") or {}
-        content = message.get("content")
-        print(f"[result] completed, first choice content: {content}")
-    else:
+    if not choices:
         print("[result] completed, no choices field found")
+        return
+
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    print(f"[result] completed, first choice content: {content}")
 
 
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
     parser = argparse.ArgumentParser(description="Test async chat completions API")
-    parser.add_argument("--base-url", required=True, help="API base URL, e.g. http://127.0.0.1:3000")
-    parser.add_argument("--api-key", required=True, help="Bearer token")
-    parser.add_argument("--model", required=True, help="Model name")
-    parser.add_argument("--prompt", required=True, help="Prompt text")
+    parser.add_argument("--base-url", default="https://ai3.sleepinsum.com", help="API base URL, e.g. http://127.0.0.1:3000")
+    parser.add_argument("--api-key", default="sk-PcldzS1wvLh0BicvsXI9cM28GhdmtcpqxgpeKHVwtSR7oOAc", help="Bearer token")
+    parser.add_argument("--model", default="gemini-3.1-flash-image-preview", help="Model name")
+    parser.add_argument("--prompt", default="一只小狗在打篮球", help="Prompt text")
     parser.add_argument("--poll-interval", type=float, default=3.0, help="Polling interval in seconds")
     parser.add_argument("--timeout", type=int, default=300, help="Polling timeout in seconds")
     return parser.parse_args()
